@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 310px;
+      max-height: 560px;
+      padding: 10px;
+      font-family: -apple-system, 'Segoe UI', Tahoma, Arial, sans-serif;
+      background: linear-gradient(160deg, #2b2d31 0%, #1f2124 50%, #17181b 100%);
+      color: #d4d6da;
+      overflow-y: auto;
+    }
+
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #4a4d53; border-radius: 3px; }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .header h3 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #e4e6ea;
+      letter-spacing: 0.3px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #55585f;
+      transition: 0.3s;
+    }
+    .status-dot.on {
+      background: #4caf7d;
+      box-shadow: 0 0 8px rgba(76, 175, 125, 0.6);
+    }
+    .status-dot.loading {
+      background: #d9a441;
+      box-shadow: 0 0 8px rgba(217, 164, 65, 0.6);
+    }
+
+    .card {
+      background: linear-gradient(160deg, #34363b, #2a2c30);
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+      border: 1px solid #3d4045;
+    }
+
+    .card-title {
+      font-size: 9px;
+      color: #8a8d94;
+      margin-bottom: 8px;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-weight: 600;
+    }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .stat-box {
+      background: #232529;
+      border-radius: 8px;
+      padding: 7px 2px;
+      text-align: center;
+      border: 1px solid #3d4045;
+    }
+    .stat-label {
+      font-size: 7.5px;
+      color: #8a8d94;
+      text-transform: uppercase;
+      margin-bottom: 3px;
+      font-weight: 600;
+    }
+    .stat-value {
+      font-size: 15px;
+      font-weight: 700;
+      color: #4caf7d;
+    }
+    .stat-box.failed .stat-value { color: #e06c66; }
+    .stat-box.skipped .stat-value { color: #d9a441; }
+    .stat-box.total .stat-value { color: #9aa3b0; }
+
+    .loading-progress {
+      display: none;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px dashed #3d4045;
+      text-align: center;
+      font-size: 10px;
+      color: #a5a8ae;
+    }
+    .loading-progress.show { display: block; }
+    .loading-progress b { color: #d9a441; }
+
+    #status {
+      font-size: 10.5px;
+      color: #a5a8ae;
+      text-align: center;
+      padding: 6px 8px;
+      background: #232529;
+      border-radius: 8px;
+      border: 1px solid #3d4045;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+
+    /* Settings inputs */
+    .setting-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .setting-row:last-child { margin-bottom: 0; }
+    .setting-row label {
+      font-size: 9.5px;
+      color: #a5a8ae;
+      flex: 1;
+      line-height: 1.3;
+    }
+    .setting-row input {
+      background: #1c1e21;
+      border: 1px solid #3d4045;
+      border-radius: 6px;
+      color: #e4e6ea;
+      font-size: 10.5px;
+      padding: 5px 7px;
+      font-family: inherit;
+      outline: none;
+    }
+    .setting-row input:focus { border-color: #5b6472; }
+    .setting-row input.num { width: 55px; text-align: center; }
+    .setting-row input.txt { width: 130px; }
+
+    .btn-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .btn-row {
+      display: flex;
+      gap: 6px;
+    }
+    .btn-row button { flex: 1; }
+
+    button {
+      padding: 9px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 11.5px;
+      font-weight: 600;
+      transition: 0.15s;
+      font-family: inherit;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+    button:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+    button:active:not(:disabled) { transform: scale(0.98); }
+
+    #loadBtn {
+      background: linear-gradient(135deg, #5b6472, #40454e);
+      color: #f0f1f3;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    }
+    #loadBtn:hover:not(:disabled) { background: linear-gradient(135deg, #6a7382, #4a5058); }
+
+    #sendBtn {
+      background: linear-gradient(135deg, #3f7a58, #2e5c42);
+      color: #f0f1f3;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    }
+    #sendBtn:hover:not(:disabled) { background: linear-gradient(135deg, #4a8c66, #37694d); }
+
+    #stopBtn {
+      background: linear-gradient(135deg, #8a4340, #6b3330);
+      color: #f0f1f3;
+    }
+    #stopBtn:hover:not(:disabled) { background: linear-gradient(135deg, #9c4d4a, #7a3b38); }
+
+    #resetBtn {
+      background: transparent;
+      color: #8a8d94;
+      border: 1px solid #3d4045;
+      font-size: 10px;
+      padding: 6px;
+    }
+    #resetBtn:hover:not(:disabled) { background: #2e3034; color: #b0b3b9; }
+
+    #logContainer {
+      background: #1c1e21;
+      border-radius: 8px;
+      border: 1px solid #3d4045;
+      max-height: 100px;
+      overflow-y: auto;
+      padding: 6px;
+      font-size: 8.5px;
+      font-family: 'SF Mono', 'Courier New', monospace;
+    }
+    .log-entry {
+      padding: 2px 0;
+      border-bottom: 1px solid #2a2c30;
+      line-height: 1.35;
+      color: #8a8d94;
+      word-break: break-word;
+    }
+    .log-entry:last-child { border-bottom: none; }
+    .log-entry.success { color: #4caf7d; }
+    .log-entry.error { color: #e06c66; }
+    .log-entry.warning { color: #d9a441; }
+    .log-entry.info { color: #6f9cc4; }
+
+    .hint {
+      font-size: 8.5px;
+      color: #6b6e75;
+      text-align: center;
+      margin-top: 8px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h3>🤖 FB Auto Responder v7.2</h3>
+    <span class="status-dot" id="dot"></span>
+  </div>
+
+  <!-- Dashboard -->
+  <div class="card">
+    <div class="card-title">الإحصائيات الحية</div>
+    <div class="dashboard">
+      <div class="stat-box">
+        <div class="stat-label">نجح</div>
+        <div class="stat-value" id="statSent">0</div>
+      </div>
+      <div class="stat-box failed">
+        <div class="stat-label">فشل</div>
+        <div class="stat-value" id="statFailed">0</div>
+      </div>
+      <div class="stat-box skipped">
+        <div class="stat-label">تخطى</div>
+        <div class="stat-value" id="statSkipped">0</div>
+      </div>
+      <div class="stat-box total">
+        <div class="stat-label">محملة</div>
+        <div class="stat-value" id="statLoaded">0</div>
+      </div>
+    </div>
+    <div class="loading-progress" id="loadingProgress">
+      ⏳ جاري تحميل المحادثات... تم تحميل <b id="loadedCount">0</b> محادثة حتى الآن
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div id="status">جاهز...</div>
+
+  <!-- Settings -->
+  <div class="card">
+    <div class="card-title">الإعدادات</div>
+    <div class="setting-row">
+      <label>عنوان الرد المحفوظ:</label>
+      <input type="text" id="replyTitleInput" class="txt" value="BM AUTO" placeholder="BM AUTO">
+    </div>
+    <div class="setting-row">
+      <label>تخطي أول (عدد) محادثة:</label>
+      <input type="number" id="skipCountInput" class="num" min="0" value="0">
+    </div>
+    <div class="setting-row">
+      <label>أو البدء من محادثة اسمها:</label>
+      <input type="text" id="startFromInput" class="txt" placeholder="اتركه فارغاً للبدء من الأول">
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="card">
+    <div class="card-title">التحكم</div>
+    <div class="btn-group">
+      <button id="loadBtn">📥 تحميل المحادثات (بدون إرسال)</button>
+      <button id="sendBtn">📨 بدء الإرسال للمحمّل</button>
+      <div class="btn-row">
+        <button id="stopBtn">⏹️ إيقاف</button>
+        <button id="resetBtn">♻️ إعادة ضبط</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="card">
+    <div class="card-title">السجل الحي</div>
+    <div id="logContainer"></div>
+  </div>
+
+  <div class="hint">
+    التحميل والإرسال منفصلان تماماً — التحميل لا يبدأ الإرسال أبداً.<br>
+    الرد المحفوظ يُختار بعنوانه (BM AUTO) أو أول رد في القائمة.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
