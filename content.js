@@ -291,12 +291,16 @@ async function buildConversationQueue() {
     addLog(`📋 بدء التحميل (يوجد ${startCount} محادثة محملة مسبقاً)...`, "info");
 
     let stableCount = 0;
-    const MAX_STABLE_ROUNDS = 5;
+    const MAX_STABLE_ROUNDS = 15;  // زيادة من 5 إلى 15 (صبر أكتر على الشبكة البطيئة)
     let lastSaveCount = conversationQueue.length;
+    let fullRefreshCount = 0;
+    const MAX_FULL_REFRESHES = 3;  // عدد الريفريشات الكاملة قبل الاستسلام
+    let lastLogTime = Date.now();
 
     while (stableCount < MAX_STABLE_ROUNDS && !stopLoadingFlag) {
         const rows = getConversationRowsWithKeys();
         let addedNew = false;
+        const countBefore = conversationQueue.length;
 
         for (const r of rows) {
             if (!seenKeys.has(r.key)) {
@@ -306,9 +310,17 @@ async function buildConversationQueue() {
             }
         }
 
-        if (conversationQueue.length - lastSaveCount >= 15) {
+        // حفظ كل 20 محادثة (بدل 15) لتقليل عدد الحفظات
+        if (conversationQueue.length - lastSaveCount >= 20) {
             await persistState();
             lastSaveCount = conversationQueue.length;
+        }
+
+        // لوج كل 30 ثانية حتى لو الـ queue مستقر
+        const now = Date.now();
+        if (now - lastLogTime > 30000) {
+            addLog(`⏳ التحميل جارٍ... تم تحميل ${conversationQueue.length} محادثة حتى الآن`, "info");
+            lastLogTime = now;
         }
 
         const container = findScrollContainer(rows[rows.length - 1]?.el || document.body);
@@ -320,9 +332,37 @@ async function buildConversationQueue() {
 
         if (container.scrollTop === beforeScroll && !addedNew) {
             stableCount++;
-            await randomDelay(800, 1500);
+            
+            // زيادة الانتظار بشكل تدريجي (exponential backoff)
+            const waitTime = Math.min(1600, 800 + (stableCount * 150));
+            await randomDelay(waitTime, waitTime + 400);
+            
+            // إذا وصلنا لـ 8 دورات استقرار، جرّب ريفريش كامل
+            if (stableCount >= 8 && fullRefreshCount < MAX_FULL_REFRESHES) {
+                addLog(`🔄 ريفريش كامل للقائمة (محاولة ${fullRefreshCount + 1}/${MAX_FULL_REFRESHES})...`, "info");
+                container.scrollTop = 0;
+                await randomDelay(1500, 2000);
+                
+                // أعد عد الصفوف بعد الريفريش
+                const refreshedRows = getConversationRowsWithKeys();
+                for (const r of refreshedRows) {
+                    if (!seenKeys.has(r.key)) {
+                        seenKeys.add(r.key);
+                        conversationQueue.push({ key: r.key, name: r.name });
+                        addedNew = true;
+                    }
+                }
+                
+                if (!addedNew) {
+                    fullRefreshCount++;  // لم تأتِ بيانات جديدة
+                } else {
+                    fullRefreshCount = 0;  // إعادة تعيين لأننا وجدنا جديد
+                    stableCount = 0;
+                }
+            }
         } else {
             stableCount = 0;
+            fullRefreshCount = 0;  // إعادة تعيين لأننا حركنا القائمة
         }
     }
 
@@ -340,21 +380,24 @@ async function buildConversationQueue() {
 }
 
 // ============================================
-// 🖱️ النقر على محادثة - نسخة صبورة v7.3
-// - جولات ثبات بدل الاستسلام من أول توقف scroll (الشبكة البطيئة)
-// - محاولات أكتر بكتير (تكفي مئات المحادثات)
-// - إعادة محاولة أخيرة من أعلى القائمة قبل تسجيل الفشل
+// 🖱️ النقر على محادثة - نسخة ذكية v9
+// - بحث ثنائي الاتجاه (لأسفل → لأعلى إن لزم)
+// - تقدير موضع الـ queue وعمل pre-scroll
+// - ريفريش كامل + بحث fuzzy كملاذ أخير
 // ============================================
 async function clickConversationByKey(targetKey, targetName, opts = {}) {
     const maxScrollAttempts = opts.maxScrollAttempts || 45;
     const allowFromTopRetry = opts.allowFromTopRetry !== false;
+    const searchDirection = opts.searchDirection || 'down';  // 'down' أو 'up'
 
-    // v8: pre-scroll to estimated position before searching
-    if (!opts.skipPreScroll) {
+    // v9: pre-scroll to estimated position before searching
+    if (!opts.skipPreScroll && searchDirection === 'down') {
         await preScrollToEstimatedPosition();
     }
 
     let stableRounds = 0;
+    const startTime = Date.now();
+    let scrollDirection = searchDirection;
 
     for (let attempt = 0; attempt < maxScrollAttempts; attempt++) {
         if (stopSendingFlag) return false;
@@ -364,13 +407,13 @@ async function clickConversationByKey(targetKey, targetName, opts = {}) {
         let target = rows.find(r => r.key === targetKey);
 
         if (!target) {
-            // v8: was === 1 (required EXACTLY one match), now >= 1
+            // v9: was === 1 (required EXACTLY one match), now >= 1
             const sameNameRows = rows.filter(r => r.name === targetName);
             if (sameNameRows.length >= 1) {
                 target = sameNameRows[0];
             }
         }
-        // v8: Arabic normalized fallback
+        // v9: Arabic normalized fallback
         if (!target) {
             const normTarget = normalizeArabic(targetName);
             const normRows = rows.filter(r => normalizeArabic(r.name) === normTarget);
@@ -378,9 +421,11 @@ async function clickConversationByKey(targetKey, targetName, opts = {}) {
         }
 
         if (target) {
+            const elapsedMs = Date.now() - startTime;
             target.el.scrollIntoView({ block: 'center', behavior: 'auto' });
             await randomDelay(300, 550);
             await humanClickWithHover(target.el);
+            addLog(`✓ وجدت "${targetName}" (${scrollDirection === 'down' ? 'أسفل' : 'أعلى'}, ${elapsedMs}ms, محاولة ${attempt + 1})`, "success");
             return true;
         }
 
@@ -388,12 +433,32 @@ async function clickConversationByKey(targetKey, targetName, opts = {}) {
         if (!container) break;
 
         const beforeScroll = container.scrollTop;
-        await humanScroll(container, 700);
+        const containerHeight = container.clientHeight;
+        const scrollHeight = container.scrollHeight;
+        
+        // اختيار اتجاه الـ scroll بناء على الوضع الحالي
+        if (scrollDirection === 'down') {
+            await humanScroll(container, 700);
+        } else {
+            // Scroll UP بمقدار نص الـ viewport
+            container.scrollTop = Math.max(0, container.scrollTop - containerHeight / 2);
+            await randomDelay(300, 500);
+        }
+        
         await randomDelay(450, 750);
 
         if (container.scrollTop === beforeScroll) {
-            // الـ scroll واقف - ممكن فيسبوك لسه بيحمّل دفعة جديدة، استنى بصبر
+            // الـ scroll واقف
             stableRounds++;
+            
+            // إذا فشل الـ scroll DOWN، جرّب UP
+            if (scrollDirection === 'down' && stableRounds >= 2) {
+                addLog(`🔄 عكس الاتجاه: البدء بالبحث لأعلى...`, "info");
+                scrollDirection = 'up';
+                stableRounds = 0;
+                continue;
+            }
+            
             await randomDelay(1000, 1600);
             if (stableRounds >= 4) break; // القائمة خلصت فعلاً
         } else {
@@ -402,18 +467,18 @@ async function clickConversationByKey(targetKey, targetName, opts = {}) {
     }
 
     // 🔄 محاولة أخيرة: ارجع لأعلى القائمة ودوّر من الأول
-    // (بعد الريفريش القائمة بتبدأ من فوق - المحادثة ممكن تكون فوق موضع الـ scroll الحالي)
     if (allowFromTopRetry && !stopSendingFlag) {
         const rows = getConversationRowsWithKeys();
         const container = findScrollContainer(rows[0]?.el || rows[rows.length - 1]?.el || document.body);
         if (container && container.scrollTop > 0) {
-            addLog(`🔄 إعادة البحث عن "${targetName}" من أعلى القائمة...`, "info");
+            addLog(`🔄 ريفريش كامل: البحث من الأعلى...`, "info");
             container.scrollTop = 0;
-            await randomDelay(900, 1400);
-            return clickConversationByKey(targetKey, targetName, { maxScrollAttempts: 35, allowFromTopRetry: false, skipPreScroll: false });
+            await randomDelay(1500, 2000);
+            return clickConversationByKey(targetKey, targetName, { maxScrollAttempts: 35, allowFromTopRetry: false, skipPreScroll: true, searchDirection: 'down' });
         }
     }
 
+    addLog(`✗ لم يتم إيجاد "${targetName}" بعد ${maxScrollAttempts} محاولات`, "error");
     return false;
 }
 
@@ -623,6 +688,7 @@ async function sendOnlyFlow() {
 function applyStartPosition() {
     const startName = (settings.startFromName || '').trim();
     const skipCount = Math.max(0, parseInt(settings.skipCount, 10) || 0);
+    const totalLoaded = conversationQueue.length;
 
     // 1) البدء من اسم محدد (أولوية أولى) - مطلق
     if (startName) {
@@ -632,41 +698,48 @@ function applyStartPosition() {
         );
         if (idx >= 0) {
             queueIndex = idx;
-            addLog(`🎯 البدء من المحادثة "${conversationQueue[idx].name}" (الموضع ${idx + 1} من ${conversationQueue.length})`, "success");
+            addLog(`🎯 البدء من المحادثة "${conversationQueue[idx].name}" (الموضع ${idx + 1} من ${totalLoaded})`, "success");
             return;
         }
-        addLog(`⚠️ لم يتم العثور على محادثة باسم "${startName}" في المحمّل - سيتم تجاهل هذا الإعداد`, "warning");
+        addLog(`⚠️ لم يتم العثور على محادثة باسم "${startName}" في المحمّل (${totalLoaded} محملة) - سيتم تجاهل هذا الإعداد`, "warning");
     }
 
-    // 2) تخطي أول X - مطلق: يتجاوز الموضع المحفوظ تماماً
+    // 2) تخطي أول X - مع التحقق من الصحة
     if (skipCount > 0) {
-        queueIndex = Math.min(skipCount, conversationQueue.length);
-        addLog(`🎯 تخطي أول ${skipCount} محادثة تماماً - البدء من الموضع ${queueIndex + 1} من ${conversationQueue.length}`, "success");
+        // تحقق: هل skipCount أكبر من إجمالي المحملة؟
+        if (skipCount >= totalLoaded) {
+            const safeSkip = Math.max(0, totalLoaded - 1);  // آخر واحدة على الأقل
+            addLog(`⚠️ تحذير: تخطي ${skipCount} لكن لدينا فقط ${totalLoaded} محادثة! تم تصحيحه إلى ${safeSkip}`, "warning");
+            queueIndex = safeSkip;
+        } else {
+            queueIndex = skipCount;
+            addLog(`🎯 تخطي أول ${skipCount} محادثة - البدء من الموضع ${queueIndex + 1} من ${totalLoaded}`, "success");
+        }
         return;
     }
 
     // 3) مفيش إعدادات بدء: أعد محاولة اللي فشلوا سابقاً (غالباً فشل "لم يتم العثور" الزائف)
     if (failedChats.size > 0) {
         let earliestFailedIdx = -1;
-        for (let i = 0; i < conversationQueue.length; i++) {
+        for (let i = 0; i < totalLoaded; i++) {
             if (failedChats.has(conversationQueue[i].key) && !processedChats.has(conversationQueue[i].key)) {
                 earliestFailedIdx = i;
                 break;
             }
         }
         if (earliestFailedIdx >= 0 && earliestFailedIdx < queueIndex) {
-            addLog(`🔄 إعادة محاولة ${failedChats.size} محادثة فشلت سابقاً (بدءاً من الموضع ${earliestFailedIdx + 1})`, "info");
+            addLog(`🔄 إعادة محاولة ${failedChats.size} محادثة فشلت سابقاً (بدءاً من الموضع ${earliestFailedIdx + 1} من ${totalLoaded})`, "info");
             queueIndex = earliestFailedIdx;
         }
         failedChats = new Set(); // امسح قائمة الفشل عشان يعاد المحاولة عليهم
     }
 
     // لو الموضع المحفوظ عدى نهاية الطابور والقائمة فيها غير معالج، ارجع للبداية
-    if (queueIndex >= conversationQueue.length) {
+    if (queueIndex >= totalLoaded) {
         const hasUnprocessed = conversationQueue.some(c => !processedChats.has(c.key));
         if (hasUnprocessed) {
             queueIndex = 0;
-            addLog(`🔄 الموضع المحفوظ وصل النهاية - إعادة الفحص من البداية (المعالَج هيتخطى تلقائياً)`, "info");
+            addLog(`🔄 الموضع المحفوظ (${queueIndex}) تجاوز النهاية (${totalLoaded}) - إعادة الفحص من البداية`, "info");
         }
     }
 }
