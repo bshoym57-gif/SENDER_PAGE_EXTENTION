@@ -1,6 +1,25 @@
-// خدمة خلفية بسيطة - الأداة دلوقتي بتشتغل على نفس التاب المفتوح
-// مفيش حاجة تشغيل نافذة مخفية، الـ popup بيتواصل مباشرة مع content script
-
+// background.js v8.0 - keepalive via chrome.alarms
 chrome.runtime.onInstalled.addListener(() => {
-    console.log("✅ [FB Bot] تم تثبيت الإضافة (v7 - يعمل على نفس التاب)");
+    console.log('[FB Bot v8.0] installed');
+    chrome.alarms.create('keepAlive', { periodInMinutes: 0.4 });
+});
+
+chrome.runtime.onStartup.addListener(() => {
+    chrome.alarms.create('keepAlive', { periodInMinutes: 0.4 });
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name !== 'keepAlive') return;
+    const data = await chrome.storage.local.get(['botTabId', 'currentMode']);
+    if (!data.botTabId || data.currentMode === 'idle') return;
+    try {
+        await chrome.tabs.sendMessage(data.botTabId, { action: 'HEARTBEAT' });
+    } catch (e) {}
+});
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.action === 'HEARTBEAT') {
+        sendResponse({ ok: true });
+    }
+    return true;
 });
