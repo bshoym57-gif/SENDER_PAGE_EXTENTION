@@ -1,26 +1,37 @@
 {
-  "manifest_version": 3,
-  "name": "FB Smart Auto Responder v7",
-  "version": "7.3.0",
-  "description": "إضافة ذكية للرد التلقائي على رسائل فيسبوك - ويدجيت محقون احترافي + تخطي مطلق لعدد محدد + بحث صبور عن المحادثات",
-  "permissions": ["tabs", "storage", "scripting"],
-  "host_permissions": ["*://*.facebook.com/*"],
-  "background": {
-    "service_worker": "background.js"
-  },
-  "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icon.png",
-      "48": "icon.png",
-      "128": "icon.png"
-    }
-  },
-  "content_scripts": [
-    {
-      "matches": ["*://*.facebook.com/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    }
-  ]
+    "manifest_version": 3,
+    "name": "FB Smart Auto Responder v8",
+    "version": "8.0.0",
+    "description": "FB smart auto-responder - smart search + background + speed",
+    "permissions": [
+        "tabs",
+        "storage",
+        "scripting",
+        "alarms"
+    ],
+    "host_permissions": [
+        "*://*.facebook.com/*"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "action": {
+        "default_popup": "popup.html",
+        "default_icon": {
+            "16": "icon.png",
+            "48": "icon.png",
+            "128": "icon.png"
+        }
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "*://*.facebook.com/*"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "run_at": "document_idle"
+        }
+    ]
 }
