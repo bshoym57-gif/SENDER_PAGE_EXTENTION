@@ -68,9 +68,14 @@ async function persistState() {
 // Anti-throttling
 // ============================================
 let _audioCtx = null;
-function startAntiThrottle() {
+// Chrome requires user gesture before AudioContext can start (autoplay policy)
+async function startAntiThrottle() {
+    if (_audioCtx) return; // prevent double-init
     try {
         _audioCtx = new AudioContext();
+        if (_audioCtx.state === 'suspended') {
+            await _audioCtx.resume();
+        }
         const buffer = _audioCtx.createBuffer(1, 1, 22050);
         const source = _audioCtx.createBufferSource();
         source.buffer = buffer;
@@ -79,9 +84,11 @@ function startAntiThrottle() {
         source.start();
     } catch (e) { /* غير حرج */ }
 }
-startAntiThrottle();
+// Only initialize after first user click (satisfies Chrome autoplay policy)
+document.addEventListener('click', () => { startAntiThrottle(); }, { once: true });
 document.addEventListener('visibilitychange', () => {
-    if (document.hidden && (!_audioCtx || _audioCtx.state !== 'running')) {
+    // Only resume if already initialized (not before first user gesture)
+    if (document.hidden && _audioCtx && _audioCtx.state !== 'running') {
         startAntiThrottle();
     }
 });
