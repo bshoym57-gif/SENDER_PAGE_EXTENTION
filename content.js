@@ -217,47 +217,18 @@ function getConversationNameRows() {
     return rows.filter(r => r.innerText && r.innerText.trim().length > 0);
 }
 
-// v8: Arabic text normalization for fuzzy name matching
-function normalizeArabic(text) {
-    return (text || '')
-        .replace(/[أإآ]/g, 'ا')
-        .replace(/ة/g, 'ه')
-        .replace(/ى/g, 'ي')
-        .replace(/[\u200f\u200e\u200b\u00a0]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
-}
-
-// v8: STABLE key built from the conversation thread id in the row's link.
-// Survives reshuffle-to-top and relative-time ("2m" -> "1h") changes that
-// used to make the old name+timestamp fingerprint drift and break matching.
 function buildRowKey(nameEl) {
     const name = nameEl.innerText.trim();
 
-    // climb ancestors looking for an <a href=".../t/<id>">
-    let node = nameEl;
-    for (let i = 0; i < 12 && node; i++) {
-        if (node.tagName === 'A' && node.getAttribute && node.getAttribute('href')) {
-            const m = node.getAttribute('href').match(/\/t\/(\d+)/);
-            if (m) return 'id:' + m[1];
-        }
-        node = node.parentElement;
+    let container = nameEl.parentElement;
+    for (let i = 0; i < 4 && container && container.parentElement; i++) {
+        container = container.parentElement;
     }
 
-    // otherwise search a few ancestors' subtrees for a thread link
-    let anc = nameEl.parentElement;
-    for (let i = 0; i < 8 && anc; i++) {
-        const link = anc.querySelector && anc.querySelector('a[href*="/t/"]');
-        if (link && link.getAttribute('href')) {
-            const m = link.getAttribute('href').match(/\/t\/(\d+)/);
-            if (m) return 'id:' + m[1];
-        }
-        anc = anc.parentElement;
-    }
+    let fullText = container ? container.innerText : name;
+    let fingerprint = fullText.replace(name, '').trim().replace(/\s+/g, ' ').slice(0, 60);
 
-    // last resort: stable name-only key (no volatile fingerprint)
-    return 'name:' + name;
+    return fingerprint ? `${name}||${fingerprint}` : name;
 }
 
 function getConversationRowsWithKeys() {
@@ -320,7 +291,7 @@ async function buildConversationQueue() {
     addLog(`📋 بدء التحميل (يوجد ${startCount} محادثة محملة مسبقاً)...`, "info");
 
     let stableCount = 0;
-    const MAX_STABLE_ROUNDS = 12; // v8: much more patience for lazy loading
+    const MAX_STABLE_ROUNDS = 5;
     let lastSaveCount = conversationQueue.length;
 
     while (stableCount < MAX_STABLE_ROUNDS && !stopLoadingFlag) {
@@ -335,34 +306,23 @@ async function buildConversationQueue() {
             }
         }
 
-        if (conversationQueue.length - lastSaveCount >= 20) {
+        if (conversationQueue.length - lastSaveCount >= 15) {
             await persistState();
             lastSaveCount = conversationQueue.length;
-            addLog(`💾 تم تحميل ${conversationQueue.length} محادثة حتى الآن...`, "info");
         }
 
         const container = findScrollContainer(rows[rows.length - 1]?.el || document.body);
-        if (!container) {
+        if (!container) break;
+
+        const beforeScroll = container.scrollTop;
+        await humanScroll(container, 600);
+        await randomDelay(500, 900);
+
+        if (container.scrollTop === beforeScroll && !addedNew) {
             stableCount++;
-            await randomDelay(1000, 1500);
-            continue;
-        }
-
-        const beforeH = container.scrollHeight;
-        const beforeTop = container.scrollTop;
-
-        // v8: jump to the very bottom to force Facebook to fetch the next batch
-        container.scrollTop = container.scrollHeight;
-        await randomDelay(1000, 1600);
-
-        const grew = container.scrollHeight > beforeH + 5;
-        const moved = container.scrollTop > beforeTop + 5;
-
-        if (addedNew || grew || moved) {
-            stableCount = 0;
+            await randomDelay(800, 1500);
         } else {
-            stableCount++;
-            await randomDelay(1500, 2500); // wait patiently before concluding it's the end
+            stableCount = 0;
         }
     }
 
@@ -386,25 +346,40 @@ async function buildConversationQueue() {
 // - إعادة محاولة أخيرة من أعلى القائمة قبل تسجيل الفشل
 // ============================================
 async function clickConversationByKey(targetKey, targetName, opts = {}) {
-    const maxScrollAttempts = opts.maxScrollAttempts || 60;
-    const normTarget = normalizeArabic(targetName);
+    const maxScrollAttempts = opts.maxScrollAttempts || 45;
+    const allowFromTopRetry = opts.allowFromTopRetry !== false;
+
+    // v8: pre-scroll to estimated position before searching
+    if (!opts.skipPreScroll) {
+        await preScrollToEstimatedPosition();
+    }
 
     let stableRounds = 0;
-    let sweptFromTop = false;
 
     for (let attempt = 0; attempt < maxScrollAttempts; attempt++) {
         if (stopSendingFlag) return false;
 
         const rows = getConversationRowsWithKeys();
 
-        // v8: stable key first, then exact name, then normalized arabic name
-        let target = rows.find(r => r.key === targetKey)
-                  || rows.find(r => r.name === targetName)
-                  || rows.find(r => normalizeArabic(r.name) === normTarget);
+        let target = rows.find(r => r.key === targetKey);
+
+        if (!target) {
+            // v8: was === 1 (required EXACTLY one match), now >= 1
+            const sameNameRows = rows.filter(r => r.name === targetName);
+            if (sameNameRows.length >= 1) {
+                target = sameNameRows[0];
+            }
+        }
+        // v8: Arabic normalized fallback
+        if (!target) {
+            const normTarget = normalizeArabic(targetName);
+            const normRows = rows.filter(r => normalizeArabic(r.name) === normTarget);
+            if (normRows.length >= 1) target = normRows[0];
+        }
 
         if (target) {
             target.el.scrollIntoView({ block: 'center', behavior: 'auto' });
-            await randomDelay(250, 450);
+            await randomDelay(300, 550);
             await humanClickWithHover(target.el);
             return true;
         }
@@ -417,24 +392,25 @@ async function clickConversationByKey(targetKey, targetName, opts = {}) {
         await randomDelay(450, 750);
 
         if (container.scrollTop === beforeScroll) {
+            // الـ scroll واقف - ممكن فيسبوك لسه بيحمّل دفعة جديدة، استنى بصبر
             stableRounds++;
-            await randomDelay(900, 1500);
-            if (stableRounds >= 5) {
-                // reached the bottom without a hit.
-                // v8: ONE upward sweep only (target may have been bumped up),
-                // NOT a from-top retry for every single person (that was O(n^2)).
-                if (!sweptFromTop) {
-                    sweptFromTop = true;
-                    stableRounds = 0;
-                    addLog(`🔍 مسحة واحدة من أعلى القائمة عن "${targetName}"...`, "info");
-                    container.scrollTop = 0;
-                    await randomDelay(800, 1200);
-                } else {
-                    break; // genuinely not present in the list
-                }
-            }
+            await randomDelay(1000, 1600);
+            if (stableRounds >= 4) break; // القائمة خلصت فعلاً
         } else {
             stableRounds = 0;
+        }
+    }
+
+    // 🔄 محاولة أخيرة: ارجع لأعلى القائمة ودوّر من الأول
+    // (بعد الريفريش القائمة بتبدأ من فوق - المحادثة ممكن تكون فوق موضع الـ scroll الحالي)
+    if (allowFromTopRetry && !stopSendingFlag) {
+        const rows = getConversationRowsWithKeys();
+        const container = findScrollContainer(rows[0]?.el || rows[rows.length - 1]?.el || document.body);
+        if (container && container.scrollTop > 0) {
+            addLog(`🔄 إعادة البحث عن "${targetName}" من أعلى القائمة...`, "info");
+            container.scrollTop = 0;
+            await randomDelay(900, 1400);
+            return clickConversationByKey(targetKey, targetName, { maxScrollAttempts: 35, allowFromTopRetry: false, skipPreScroll: false });
         }
     }
 
