@@ -86,6 +86,18 @@ document.addEventListener('visibilitychange', () => {
     }
 });
 
+// v8: Web Locks API - keeps tab alive when browser minimized
+(function() {
+    try {
+        if (typeof navigator !== 'undefined' && navigator.locks) {
+            navigator.locks.request('fb_bot_keepalive', { mode: 'shared' }, () => new Promise(() => {}));
+        }
+    } catch(e) {}
+})();
+
+// v8: Heartbeat to background service worker every 25s
+setInterval(() => { try { chrome.runtime.sendMessage({ action: 'HEARTBEAT' }); } catch(e) {} }, 25000);
+
 // ============================================
 // تحميل الحالة المحفوظة عند بدء السكريبت
 // ============================================
@@ -143,12 +155,12 @@ function humanClick(el) {
 }
 
 async function humanClickWithHover(el) {
-    await randomDelay(150, 450);
+    await randomDelay(80, 250); // v8: faster
     humanClick(el);
 }
 
 function smartDelay() {
-    const baseDelay = 3500 + Math.random() * 3500;
+    const baseDelay = 2000 + Math.random() * 2000; // v8: faster
     const errorRatio = stats.failed / Math.max(stats.sent + stats.failed, 1);
     const multiplier = 1 + errorRatio * 0.8;
     return Math.floor(baseDelay * multiplier);
@@ -181,6 +193,17 @@ function findAllByLabel(labelText) {
 }
 
 const NAME_CLASS_SELECTOR = 'div.x1vvvo52.xxio538.x12nagc.xeuugli';
+
+// v8: Arabic text normalization for fuzzy name matching
+function normalizeArabic(text) {
+    return (text || '')
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .replace(/[\u200f\u200e\u200b\u00a0]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim().toLowerCase();
+}
 
 function getConversationNameRows() {
     let rows = Array.from(document.querySelectorAll(NAME_CLASS_SELECTOR));
@@ -232,6 +255,22 @@ async function humanScroll(container, totalAmount) {
 }
 
 // ============================================
+// v8: Pre-scroll to estimated position based on queue index
+async function preScrollToEstimatedPosition() {
+    if (queueIndex < 0 || conversationQueue.length === 0) return;
+    const rows = getConversationNameRows();
+    if (rows.length === 0) return;
+    const container = findScrollContainer(rows[0]);
+    if (!container) return;
+    const ratio = queueIndex / Math.max(conversationQueue.length, 1);
+    const targetScrollTop = Math.floor(ratio * container.scrollHeight);
+    const currentRatio = container.scrollTop / Math.max(container.scrollHeight, 1);
+    if (Math.abs(currentRatio - ratio) > 0.07) {
+        container.scrollTop = targetScrollTop;
+        await randomDelay(500, 900);
+    }
+}
+
 // 📋 تحميل المحادثات فقط (بدون أي إرسال تلقائي)
 // ============================================
 async function buildConversationQueue() {
@@ -303,6 +342,11 @@ async function clickConversationByKey(targetKey, targetName, opts = {}) {
     const maxScrollAttempts = opts.maxScrollAttempts || 45;
     const allowFromTopRetry = opts.allowFromTopRetry !== false;
 
+    // v8: pre-scroll to estimated position before searching
+    if (!opts.skipPreScroll) {
+        await preScrollToEstimatedPosition();
+    }
+
     let stableRounds = 0;
 
     for (let attempt = 0; attempt < maxScrollAttempts; attempt++) {
@@ -313,10 +357,17 @@ async function clickConversationByKey(targetKey, targetName, opts = {}) {
         let target = rows.find(r => r.key === targetKey);
 
         if (!target) {
+            // v8: was === 1 (required EXACTLY one match), now >= 1
             const sameNameRows = rows.filter(r => r.name === targetName);
-            if (sameNameRows.length === 1) {
+            if (sameNameRows.length >= 1) {
                 target = sameNameRows[0];
             }
+        }
+        // v8: Arabic normalized fallback
+        if (!target) {
+            const normTarget = normalizeArabic(targetName);
+            const normRows = rows.filter(r => normalizeArabic(r.name) === normTarget);
+            if (normRows.length >= 1) target = normRows[0];
         }
 
         if (target) {
@@ -352,7 +403,7 @@ async function clickConversationByKey(targetKey, targetName, opts = {}) {
             addLog(`🔄 إعادة البحث عن "${targetName}" من أعلى القائمة...`, "info");
             container.scrollTop = 0;
             await randomDelay(900, 1400);
-            return clickConversationByKey(targetKey, targetName, { maxScrollAttempts: 35, allowFromTopRetry: false });
+            return clickConversationByKey(targetKey, targetName, { maxScrollAttempts: 35, allowFromTopRetry: false, skipPreScroll: false });
         }
     }
 
@@ -486,6 +537,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else if (request.action === "RESET") {
         resetAll();
         sendResponse({ ok: true });
+    } else if (request.action === "HEARTBEAT") {
+        sendResponse({ ok: true, mode: currentMode });
     }
     return true;
 });
@@ -566,7 +619,10 @@ function applyStartPosition() {
 
     // 1) البدء من اسم محدد (أولوية أولى) - مطلق
     if (startName) {
-        const idx = conversationQueue.findIndex(c => c.name.includes(startName));
+        const normStartName = normalizeArabic(startName);
+        const idx = conversationQueue.findIndex(c =>
+            c.name.includes(startName) || normalizeArabic(c.name) === normStartName
+        );
         if (idx >= 0) {
             queueIndex = idx;
             addLog(`🎯 البدء من المحادثة "${conversationQueue[idx].name}" (الموضع ${idx + 1} من ${conversationQueue.length})`, "success");
